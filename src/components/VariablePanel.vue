@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useVariableStore } from '@/stores/variables';
-import { fetchPresetAsset, fetchPresetList, type PresetEntry, type VarDef, type VarManifest } from '@/manifest';
+import type { VarDef } from '@/manifest';
 import { logger } from '@/utils/logger';
 import ToggleSwitch from './ToggleSwitch.vue';
 
@@ -11,8 +11,6 @@ const GENERAL_TAB = { id: '通用', label: '通用', icon: 'fa-solid fa-sliders'
 const EXT_VERSION = __APP_VERSION__;
 
 const activeTab = ref<string>('');
-const presets = ref<PresetEntry[]>([]);
-const importing = ref<string | null>(null);
 
 const tabs = ref<{ id: string; label: string; icon: string }[]>([]);
 
@@ -34,10 +32,6 @@ watch(
     { immediate: true },
 );
 
-function onRefresh(): void {
-    variableStore.refresh();
-}
-
 function onTextChange(def: VarDef, event: Event): void {
     const target = event.target as HTMLInputElement;
     variableStore.set(def.name, target.value);
@@ -48,7 +42,7 @@ function onChipClick(def: VarDef, value: string): void {
 }
 
 function onToggle(def: VarDef, enabled: boolean): void {
-    variableStore.set(def.name, enabled ? '开' : '关');
+    variableStore.set(def.name, enabled ? 'true' : 'false');
 }
 
 function onReset(def: VarDef): void {
@@ -58,49 +52,53 @@ function onReset(def: VarDef): void {
     }
 }
 
-async function onImportPreset(entry: PresetEntry): Promise<void> {
-    if (importing.value) return;
-    importing.value = entry.name;
-    try {
-        const preset = await fetchPresetAsset(entry);
-        if (!preset) throw new Error('预设资源加载失败');
+function showDef(def: VarDef): boolean {
+    if (!def.vif) return true;
+    const list = Array.isArray(def.vif) ? def.vif : [def.vif];
+    for (const cond of list) {
+        if (cond.mode === 'flip') continue;
+        const current = variableStore.values[cond.var] ?? '';
+        if (cond.equals !== undefined && current !== cond.equals) return false;
+        if (cond.not !== undefined && current === cond.not) return false;
+    }
+    return true;
+}
 
-        await new Promise<void>((resolve, reject) => {
-            $.ajax({
-                type: 'POST',
-                url: '/api/presets/save',
-                data: JSON.stringify({ name: entry.name, preset, apiId: 'openai' }),
-                contentType: 'application/json',
-                success: () => resolve(),
-                error: (xhr: { status: number }) => reject(new Error(`HTTP ${xhr.status}`)),
-            });
-        });
+function isFlipLocked(def: VarDef): boolean {
+    if (!def.vif) return false;
+    const list = Array.isArray(def.vif) ? def.vif : [def.vif];
+    return list.some(cond => cond.mode === 'flip' && !vifCondMet(cond));
+}
 
-        const manifest = preset.variable_manifest as VarManifest | undefined;
-        if (manifest && Array.isArray(manifest.groups)) {
-            variableStore.cacheManifest(manifest, entry.name);
+function vifCondMet(cond: { var: string; equals?: string; not?: string }): boolean {
+    const current = variableStore.values[cond.var] ?? '';
+    if (cond.equals !== undefined) return current === cond.equals;
+    if (cond.not !== undefined) return current !== cond.not;
+    return true;
+}
+
+async function onEditLong(def: VarDef): Promise<void> {
+    const ctx = (() => {
+        try {
+            return SillyTavern.getContext();
+        } catch {
+            return null;
         }
+    })();
+    if (!ctx) return;
 
+    const current = variableStore.values[def.name] ?? def.default;
+    const desc = `<h3 style="margin:0 0 8px 0">${def.label}</h3>${def.help ? `<div style="margin-bottom:8px;font-size:0.85em;opacity:0.8">${def.help}</div>` : ''}`;
+    const result = await ctx.callPopup(desc, 'input', current, { wide: true, rows: 20, okButton: '保存' });
+    if (result !== false && typeof result === 'string') {
+        variableStore.set(def.name, result.trim());
         if (typeof toastr !== 'undefined') {
-            toastr.success(`预设 ${entry.name} 已写入磁盘，即将刷新页面加载`, '预设控制台');
+            toastr.success(`${def.label} 已保存`, '预设控制台');
         }
-        setTimeout(() => {
-            window.location.reload();
-        }, 1500);
-    } catch (err) {
-        if (typeof toastr !== 'undefined') {
-            toastr.error(`导入失败：${err instanceof Error ? err.message : String(err)}`, '预设控制台');
-        }
-    } finally {
-        importing.value = null;
     }
 }
 
 onMounted(() => {
-    variableStore.init();
-    fetchPresetList().then(list => {
-        presets.value = list;
-    });
     const ctx = (() => {
         try {
             return SillyTavern.getContext();
@@ -126,7 +124,7 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="stmp-settings">
-        <div class="stmp-tab-bar">
+        <div v-if="variableStore.hasManifest" class="stmp-tab-bar">
             <div
                 v-for="tab in tabs"
                 :key="tab.id"
@@ -139,23 +137,15 @@ onBeforeUnmount(() => {
             </div>
         </div>
 
-        <div class="stmp-tab-content">
+        <div v-if="variableStore.hasManifest" class="stmp-tab-content">
             <div
                 v-for="group in variableStore.manifest?.groups"
                 :key="group.title"
                 v-show="activeTab === group.title"
                 class="stmp-tab-panel"
             >
-                <div v-if="variableStore.manifest?.groups[0] && group.title === variableStore.manifest.groups[0].title" class="stmp-row">
-                    <div class="stmp-row-info">
-                        <div class="stmp-row-title">变量状态</div>
-                    </div>
-                    <div class="menu_button menu_button_icon stmp-action-btn" title="刷新" @click="onRefresh">
-                        <i class="fa-solid fa-rotate" />
-                    </div>
-                </div>
-
-                <div v-for="def in group.defs" :key="def.name" class="stmp-row">
+                <template v-for="def in group.defs" :key="def.name">
+                <div v-if="showDef(def)" class="stmp-row">
                     <div class="stmp-row-info">
                         <div class="stmp-row-title">
                             {{ def.label }}
@@ -165,6 +155,7 @@ onBeforeUnmount(() => {
                                 :title="def.help"
                             />
                         </div>
+                        <div v-if="def.subtitle" class="stmp-row-subtitle">{{ def.subtitle }}</div>
                     </div>
 
                     <template v-if="def.options">
@@ -176,30 +167,33 @@ onBeforeUnmount(() => {
                                 :class="{ active: variableStore.values[def.name] === option }"
                                 @click="onChipClick(def, option)"
                             >
-                                <span>{{ option }}</span>
+                                <span>{{ def.optionLabels?.[option] ?? option }}</span>
                             </div>
                         </div>
                     </template>
 
                     <template v-else-if="def.type === 'toggle'">
                         <ToggleSwitch
-                            :model-value="variableStore.values[def.name] === '开'"
+                            :model-value="variableStore.values[def.name] === 'true'"
+                            :disabled="isFlipLocked(def)"
                             @update:model-value="onToggle(def, $event)"
                         />
+                    </template>
+
+                    <template v-else-if="def.type === 'textarea'">
+                        <div
+                            class="menu_button menu_button_icon stmp-action-btn"
+                            title="编辑"
+                            @click="onEditLong(def)"
+                        >
+                            <i class="fa-solid fa-pen-to-square" />
+                        </div>
                     </template>
 
                     <template v-else>
                         <div class="stmp-model-wrap">
                             <input
-                                v-if="def.type === 'text'"
                                 class="text_pole stmp-text-input"
-                                :value="variableStore.values[def.name]"
-                                :placeholder="def.help || ''"
-                                @change="onTextChange(def, $event)"
-                            />
-                            <textarea
-                                v-else
-                                class="text_pole stmp-text-input vp-textarea"
                                 :value="variableStore.values[def.name]"
                                 :placeholder="def.help || ''"
                                 @change="onTextChange(def, $event)"
@@ -214,35 +208,20 @@ onBeforeUnmount(() => {
                         </div>
                     </template>
                 </div>
+                </template>
             </div>
 
             <div v-show="activeTab === GENERAL_TAB.id" class="stmp-tab-panel">
-                <div v-if="!variableStore.hasManifest" class="stmp-row">
+                <div class="stmp-row">
                     <div class="stmp-row-info">
-                        <div class="stmp-row-title">未检测到变量面板</div>
-                        <div class="stmp-row-desc">当前预设未声明 variable_manifest，请先导入支持的预设</div>
+                        <div class="stmp-row-title">当前预设</div>
+                        <div class="stmp-row-desc">{{ variableStore.currentPresetName ?? '未选择' }}</div>
                     </div>
-                </div>
-
-                <div class="stmp-section-header">
-                    <div class="stmp-section-title">
-                        <i class="fa-solid fa-file-import" />
-                        <span>预设导入</span>
-                    </div>
-                </div>
-
-                <div v-for="preset in presets" :key="preset.name" class="stmp-row">
-                    <div class="stmp-row-info">
-                        <div class="stmp-row-title">{{ preset.name }}</div>
-                    </div>
-                    <div
-                        class="menu_button menu_button_icon stmp-action-btn"
-                        :class="{ 'stmp-spin': importing === preset.name }"
-                        title="导入"
-                        @click="onImportPreset(preset)"
-                    >
-                        <i class="fa-solid fa-file-import" />
-                    </div>
+                    <i
+                        v-if="variableStore.hasManifest"
+                        class="fa-solid fa-circle-check stmp-preset-ok"
+                        title="该预设已启用变量控制"
+                    />
                 </div>
 
                 <div class="stmp-separator" />
@@ -259,6 +238,12 @@ onBeforeUnmount(() => {
                     <div class="stmp-about-copyright"><a href="https://www.erocraft.com" target="_blank" rel="noopener">艾萝工坊</a> © 2015 - 2026</div>
                 </div>
             </div>
+        </div>
+
+        <div v-else class="stmp-unsupported">
+            <i class="fa-solid fa-circle-exclamation stmp-unsupported-icon" />
+            <div class="stmp-unsupported-title">不支持的预设</div>
+            <div class="stmp-unsupported-desc">当前预设未携带 manifest，无法显示变量面板。<br />请导入带有 ST-Preset-Console manifest 的预设，或切换到支持的预设。</div>
         </div>
     </div>
 </template>
@@ -351,6 +336,52 @@ onBeforeUnmount(() => {
     line-height: 1.3;
 }
 
+.stmp-row-subtitle {
+    font-size: calc(var(--mainFontSize, 14px) * 0.82);
+    color: var(--SmartThemeEmColor, rgb(145, 145, 145));
+    opacity: 0.75;
+    line-height: 1.3;
+}
+
+.stmp-preset-ok {
+    flex-shrink: 0;
+    color: var(--SmartThemeQuoteColor, #4caf50);
+    opacity: 0.9;
+}
+
+
+
+.stmp-unsupported {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 10px;
+    min-height: 260px;
+    padding: 24px 16px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.stmp-unsupported-icon {
+    font-size: 34px;
+    color: var(--SmartThemeQuoteColor, #e18a24);
+    opacity: 0.85;
+}
+
+.stmp-unsupported-title {
+    font-size: calc(var(--mainFontSize, 14px) * 1.2);
+    font-weight: bold;
+    color: var(--SmartThemeBodyColor, #ccc);
+}
+
+.stmp-unsupported-desc {
+    font-size: calc(var(--mainFontSize, 14px) * 0.85);
+    color: var(--SmartThemeEmColor, rgb(145, 145, 145));
+    line-height: 1.5;
+}
+
 .stmp-chips {
     display: inline-flex;
     flex-shrink: 0;
@@ -401,12 +432,7 @@ onBeforeUnmount(() => {
     font-size: calc(var(--mainFontSize, 14px) * 0.8);
 }
 
-.stmp-slider-wrap {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-}
+
 
 .stmp-slider {
     -webkit-appearance: none;
@@ -439,12 +465,7 @@ onBeforeUnmount(() => {
     cursor: pointer;
 }
 
-.stmp-slider-val {
-    font-size: calc(var(--mainFontSize, 14px) * 0.9);
-    color: var(--SmartThemeBodyColor, #ccc);
-    min-width: 28px;
-    text-align: right;
-}
+
 
 .stmp-separator {
     height: 1px;
@@ -452,29 +473,11 @@ onBeforeUnmount(() => {
     margin: 8px 0;
 }
 
-.stmp-section-header {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: 8px 0 4px;
-}
 
-.stmp-section-title {
-    font-size: calc(var(--mainFontSize, 14px) * 0.8);
-    font-weight: bold;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--SmartThemeQuoteColor, rgb(225, 138, 36));
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
 
-.stmp-section-sub {
-    font-size: calc(var(--mainFontSize, 14px) * 0.75);
-    color: var(--SmartThemeEmColor, rgb(145, 145, 145));
-    line-height: 1.3;
-}
+
+
+
 
 .stmp-action-btn {
     margin: 0 !important;
@@ -488,26 +491,15 @@ onBeforeUnmount(() => {
     font-size: var(--mainFontSize, 14px);
 }
 
-.vp-textarea {
-    min-height: 48px;
-    resize: vertical;
-}
 
-.stmp-verify-ok {
-    color: #4caf50 !important;
-}
 
-.stmp-verify-ok i {
-    color: #4caf50;
-}
 
-.stmp-verify-warn {
-    color: #ff9800 !important;
-}
 
-.stmp-verify-warn i {
-    color: #ff9800;
-}
+
+
+
+
+
 
 .stmp-help-tip {
     font-size: calc(var(--mainFontSize, 14px) * 0.75);
@@ -529,14 +521,9 @@ onBeforeUnmount(() => {
     max-width: 240px;
 }
 
-.stmp-spin {
-    pointer-events: none;
-    opacity: 0.6;
-}
 
-.stmp-spin i {
-    animation: stmp-spin 0.8s linear infinite;
-}
+
+
 
 @keyframes stmp-spin {
     to {
@@ -603,13 +590,5 @@ onBeforeUnmount(() => {
     margin-top: 6px;
 }
 
-.stmp-macro-hint {
-    display: inline-block;
-    padding: 1px 4px;
-    margin: 1px;
-    border-radius: 3px;
-    background: rgba(0, 0, 0, 0.3);
-    color: var(--SmartThemeQuoteColor, rgb(225, 138, 36));
-    font-size: 0.9em;
-}
+
 </style>

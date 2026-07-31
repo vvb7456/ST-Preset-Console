@@ -1,10 +1,24 @@
+export interface VarIf {
+    var: string;
+    equals?: string;
+    not?: string;
+    /** 'flip' = 互斥开关（行常显，条件不满足时强制翻转）; 默认 = 从属子选项（条件不满足时隐藏） */
+    mode?: 'flip';
+}
+
+/** 支持多条件（数组 = AND）；不同 mode 的条件可混用 */
+export type VarIfList = VarIf | VarIf[];
+
 export interface VarDef {
     name: string;
     label: string;
+    subtitle?: string;
     help?: string;
     default: string;
     options?: string[];
+    optionLabels?: Record<string, string>;
     type?: 'text' | 'textarea' | 'toggle';
+    vif?: VarIfList;
 }
 
 export interface VarGroup {
@@ -15,32 +29,4 @@ export interface VarGroup {
 
 export interface VarManifest {
     groups: VarGroup[];
-}
-
-export interface PresetEntry {
-    file: string;
-    name: string;
-}
-
-const EXT_BASE = '/scripts/extensions/third-party/ST-Preset-Console';
-
-export async function fetchPresetList(): Promise<PresetEntry[]> {
-    try {
-        const res = await fetch(`${EXT_BASE}/presets.json`);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return Array.isArray(data.presets) ? data.presets : [];
-    } catch {
-        return [];
-    }
-}
-
-export async function fetchPresetAsset(entry: PresetEntry): Promise<Record<string, unknown> | null> {
-    try {
-        const res = await fetch(`${EXT_BASE}/${entry.file}`);
-        if (!res.ok) return null;
-        return await res.json();
-    } catch {
-        return null;
-    }
 }

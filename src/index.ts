@@ -20,6 +20,10 @@ const DRAWER_HTML = `
 let app: App<Element> | null = null;
 let drawer: HTMLElement | null = null;
 
+// 预设调度器的开关判断走 ST 内置的变量简写比较：{{if {{$变量 == 值}}}} ... {{/if}}
+// 不要为此注册自定义宏：{{if}} 遇到无法解析的宏会拿到宏原文当条件，
+// 原文非空且不是 'false'，条件恒真 —— 扩展一旦没加载，所有开关块会静默全开。
+
 function addDrawer(): boolean {
     const $container = $('#extensions_settings2');
     if (!$container || !$container.length) {
@@ -41,10 +45,21 @@ function addDrawer(): boolean {
 
     const variableStore = useVariableStore(pinia);
     variableStore.init();
+
+    const ctx = SillyTavern.getContext();
+    const onPresetChanged = () => {
+        variableStore.reloadForPreset();
+    };
+    ctx.eventSource?.on(ctx.event_types?.PRESET_CHANGED, onPresetChanged);
+    listenerCleanup = () => {
+        ctx.eventSource?.off(ctx.event_types?.PRESET_CHANGED, onPresetChanged);
+    };
     return true;
 }
 
 function removeDrawer(): void {
+    listenerCleanup?.();
+    listenerCleanup = null;
     if (app) {
         app.unmount();
         app = null;
@@ -52,6 +67,8 @@ function removeDrawer(): void {
     drawer?.remove();
     drawer = null;
 }
+
+let listenerCleanup: (() => void) | null = null;
 
 export function init(): void {
     try {
