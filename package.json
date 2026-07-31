@@ -1,0 +1,23 @@
+{
+    "name": "st-preset-console",
+    "version": "0.1.0",
+    "description": "预设控制台 - SillyTavern 预设变量控制面板",
+    "type": "module",
+    "scripts": {
+        "dev": "vite build --watch",
+        "prebuild": "node scripts/sync-version.mjs",
+        "build": "vite build",
+        "typecheck": "vue-tsc --noEmit"
+    },
+    "dependencies": {
+        "pinia": "^4.0.2",
+        "vue": "^3.5.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "@vitejs/plugin-vue": "^5.1.0",
+        "typescript": "^5.6.0",
+        "vite": "^5.4.0",
+        "vue-tsc": "^2.1.0"
+    }
+}

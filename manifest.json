@@ -1,0 +1,15 @@
+{
+    "display_name": "预设控制台",
+    "loading_order": 90,
+    "requires": [],
+    "optional": [],
+    "js": "dist/index.js",
+    "css": "dist/style.css",
+    "author": "local",
+    "version": "0.1.0",
+    "minimum_client_version": "1.12.13",
+    "hooks": {
+        "activate": "init",
+        "disable": "disable"
+    }
+}
