@@ -2,6 +2,7 @@
     "name": "st-preset-console",
     "version": "0.1.1",
     "description": "预设控制台 - SillyTavern 预设变量控制面板",
+    "license": "AGPL-3.0-or-later",
     "type": "module",
     "scripts": {
         "dev": "vite build --watch",
